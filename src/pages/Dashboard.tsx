@@ -32,6 +32,7 @@ import {
 } from 'recharts';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
+import { systemApi, riskApi, groupApi } from '../services/api';
 
 const AGENT_STATS = [
   { name: 'Security Auditor', weight: 0.88, count: 124, accuracy: 96, trend: 'up' },
@@ -67,15 +68,54 @@ const RECENT_FLOW = [
 ];
 
 export default function Dashboard() {
+  const [systemHealth, setSystemHealth] = useState('Operational');
+  const [groupCount, setGroupCount] = useState(0);
+  const [sessionCount, setSessionCount] = useState(0);
+  const [challengeRate, setChallengeRate] = useState(0);
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        // Check system health
+        await systemApi.health();
+        setSystemHealth('Operational');
+      } catch (e) {
+        setSystemHealth('Degraded');
+      }
+
+      try {
+        // Load groups
+        const { data: groupsData } = await groupApi.getGroups();
+        setGroupCount(Array.isArray(groupsData) ? groupsData.length : 0);
+      } catch (e) {
+        // silent
+      }
+
+      try {
+        // Load sessions
+        const { data: sessionsData } = await riskApi.getSessions({ limit: 20 });
+        if (Array.isArray(sessionsData)) {
+          setSessionCount(sessionsData.length);
+          const challengeCount = sessionsData.filter((s: any) => s.challenge_count > 0).length;
+          setChallengeRate(sessionsData.length > 0 ? Math.round((challengeCount / sessionsData.length) * 100) : 0);
+        }
+      } catch (e) {
+        // silent
+      }
+    };
+
+    loadData();
+  }, []);
+
   return (
     <div className="flex flex-col gap-8">
       {/* Top Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {[
-          { label: 'System Status', value: 'Operational', sub: 'v1.2.4 Active', icon: Activity, color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
-          { label: 'Active Agents', value: '12', sub: 'Across 4 Groups', icon: Users, color: 'text-blue-400', bg: 'bg-blue-500/10' },
-          { label: 'Tasks Processed', value: '1,284', sub: 'Last 24h', icon: Layers, color: 'text-purple-400', bg: 'bg-purple-500/10' },
-          { label: 'Avg Consensus', value: '94.2%', sub: '+2.1% vs yesterday', icon: TrendingUp, color: 'text-brand-accent', bg: 'bg-brand-accent/10' },
+          { label: 'System Status', value: systemHealth, sub: 'v1.2.4 Active', icon: Activity, color: systemHealth === 'Operational' ? 'text-emerald-400' : 'text-red-400', bg: systemHealth === 'Operational' ? 'bg-emerald-500/10' : 'bg-red-500/10' },
+          { label: 'Active Groups', value: groupCount.toString(), sub: 'Multi-agent teams', icon: Users, color: 'text-blue-400', bg: 'bg-blue-500/10' },
+          { label: 'Sessions', value: sessionCount.toString(), sub: 'Last 24h', icon: Layers, color: 'text-purple-400', bg: 'bg-purple-500/10' },
+          { label: 'Challenge Rate', value: `${challengeRate}%`, sub: 'Verification required', icon: TrendingUp, color: 'text-brand-accent', bg: 'bg-brand-accent/10' },
         ].map((stat, i) => (
           <motion.div 
             key={stat.label}

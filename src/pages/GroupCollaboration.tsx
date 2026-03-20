@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { groupApi } from '../services/api';
 import { 
   Users, 
   Plus, 
@@ -149,22 +150,7 @@ const nodeTypes = {
 
 // --- Initial Groups & Data ---
 
-const DEFAULT_AGENTS: Agent[] = [
-  { id: 'a1', name: 'Strategic Planner', role: 'Context Architect', type: 'strategy' },
-  { id: 'a2', name: 'Technical Lead', role: 'Implementation Expert', type: 'tech' },
-  { id: 'a3', name: 'Security Auditor', role: 'Risk Evaluator', type: 'security' },
-  { id: 'a4', name: 'Quality Guard', role: 'Output Validator', type: 'qa' },
-];
-
-const INITIAL_GROUPS: Group[] = [
-  {
-    id: 'g1',
-    name: 'Core Orchestrator',
-    mode: 'consensus',
-    agents: DEFAULT_AGENTS,
-    status: 'active'
-  }
-];
+const INITIAL_GROUPS: Group[] = [];
 
 const getNodesForGroup = (group: Group): Node[] => {
   const nodes: Node[] = [
@@ -235,12 +221,12 @@ const getEdgesForGroup = (group: Group): Edge[] => {
 };
 
 export default function GroupCollaboration() {
-  const [groups, setGroups] = useState<Group[]>(INITIAL_GROUPS);
-  const [activeGroupId, setActiveGroupId] = useState(INITIAL_GROUPS[0].id);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const activeGroup = groups.find(g => g.id === activeGroupId) || groups[0];
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(getNodesForGroup(activeGroup));
-  const [edges, setEdges, onEdgesChange] = useEdgesState(getEdgesForGroup(activeGroup));
+  const [nodes, setNodes, onNodesChange] = useNodesState(activeGroup ? getNodesForGroup(activeGroup) : []);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(activeGroup ? getEdgesForGroup(activeGroup) : []);
   const [isRunning, setIsRunning] = useState(false);
   const [chat, setChat] = useState([
     { role: 'system', content: 'Multi-Agent Network Initialized. Ready for task orchestration.', time: '10:24 AM' },
@@ -252,10 +238,73 @@ export default function GroupCollaboration() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupMode, setNewGroupMode] = useState<CollaborationMode>('consensus');
+  const [availableAgents, setAvailableAgents] = useState<any[]>([]);
+  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
 
+  // 初始加载 groups 和 agents
   useEffect(() => {
-    setNodes(getNodesForGroup(activeGroup));
-    setEdges(getEdgesForGroup(activeGroup));
+    const fetchData = async () => {
+      try {
+        const { data: groupsData } = await groupApi.getGroups();
+        if (Array.isArray(groupsData) && groupsData.length > 0) {
+          const mapped = groupsData.map((g: any) => ({
+            id: g.group_id || g.id,
+            name: g.group_name || g.name,
+            mode: (g.mode || 'consensus') as CollaborationMode,
+            agents: [],
+            status: 'active' as const,
+          }));
+          setGroups(mapped);
+          setActiveGroupId(mapped[0].id);
+        }
+      } catch (e) {
+        // 保持静默
+      }
+    };
+    fetchData();
+  }, []);
+
+  // 当打开 modal 时加载可用 agents
+  useEffect(() => {
+    if (showCreateModal) {
+      const fetchAgents = async () => {
+        try {
+          const { data } = await groupApi.getAvailableAgents();
+          setAvailableAgents(Array.isArray(data) ? data : []);
+          setSelectedAgents([]);
+        } catch (e) {
+          addLog('System', 'Failed to load available agents', 'error');
+        }
+      };
+      fetchAgents();
+    }
+  }, [showCreateModal]);
+
+  // 当 activeGroup 变化时更新 nodes 和 edges
+  useEffect(() => {
+    if (activeGroup) {
+      setNodes(getNodesForGroup(activeGroup));
+      setEdges(getEdgesForGroup(activeGroup));
+      
+      // 加载群组的 members
+      const fetchMembers = async () => {
+        try {
+          const { data } = await groupApi.getMembers(activeGroup.id);
+          if (Array.isArray(data)) {
+            const agents = data.map((m: any) => ({
+              id: m.agent_id,
+              name: m.agent_id,
+              role: m.role || 'Agent',
+              type: 'agent',
+            }));
+            setGroups(prev => prev.map(g => g.id === activeGroup.id ? { ...g, agents } : g));
+          }
+        } catch (e) {
+          // 保持静默
+        }
+      };
+      fetchMembers();
+    }
   }, [activeGroupId]);
 
   const addLog = (agent: string, action: string, status: string = 'info') => {
@@ -326,26 +375,71 @@ export default function GroupCollaboration() {
     setIsRunning(false);
   };
 
-  const handleCreateGroup = () => {
-    if (!newGroupName.trim()) return;
-    const newGroup: Group = {
-      id: `g-${Date.now()}`,
-      name: newGroupName,
-      mode: newGroupMode,
-      agents: DEFAULT_AGENTS,
-      status: 'idle'
-    };
-    setGroups(prev => [...prev, newGroup]);
-    setActiveGroupId(newGroup.id);
-    setShowCreateModal(false);
-    setNewGroupName('');
+  const handleCreateGroup = async () => {
+    if (!newGroupName.trim() || selectedAgents.length === 0) return;
+    try {
+      const { data } = await groupApi.createGroup({
+        group_name: newGroupName,
+        description: `${newGroupName} demo group`,
+        mode: newGroupMode,
+        created_by: 'demo_user',
+        initial_members: selectedAgents.map(agentId => ({ agent_id: agentId })),
+      });
+      const g: Group = {
+        id: data.group_id || data.id,
+        name: data.group_name || data.name,
+        mode: (data.mode || newGroupMode) as CollaborationMode,
+        agents: selectedAgents.map(id => ({
+          id,
+          name: id,
+          role: 'Agent',
+          type: 'agent',
+        })),
+        status: 'active',
+      };
+      setGroups(prev => [...prev, g]);
+      setActiveGroupId(g.id);
+      setShowCreateModal(false);
+      setNewGroupName('');
+      setSelectedAgents([]);
+      addLog('System', 'New group created successfully.', 'success');
+    } catch (e) {
+      addLog('System', 'Create group failed', 'error');
+    }
   };
 
-  const handleSend = () => {
-    if (!inputValue.trim()) return;
-    setChat(prev => [...prev, { role: 'user', content: inputValue, time: new Date().toLocaleTimeString() }]);
+  const handleSend = async () => {
+    if (!inputValue.trim() || !activeGroup?.id) return;
+    const task = inputValue.trim();
+    setChat(prev => [...prev, { role: 'user', content: task, time: new Date().toLocaleTimeString() }]);
     setInputValue('');
-    runSimulation();
+    try {
+      await groupApi.sendMessage(activeGroup.id, {
+        sender_id: 'demo_user',
+        sender_type: 'user',
+        content: task,
+      });
+      setIsRunning(true);
+      const { data } = await groupApi.runConsensus(activeGroup.id, {
+        task,
+        quorum_threshold: 0.5,
+        stability_horizon: 2,
+        max_rounds: 3,
+      });
+      setChat(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: `Consensus complete: ${JSON.stringify(data?.final_solution || data).slice(0, 220)}...`,
+          time: new Date().toLocaleTimeString(),
+        },
+      ]);
+      addLog('Consensus', 'Consensus API completed.', 'success');
+    } catch (e) {
+      addLog('System', 'Send/consensus failed', 'error');
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   return (
@@ -647,6 +741,54 @@ export default function GroupCollaboration() {
                     </div>
                   </div>
 
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Select Agents</label>
+                    <div className="max-h-[200px] overflow-y-auto space-y-2 p-3 bg-brand-bg rounded-2xl border border-brand-border">
+                      {availableAgents.length > 0 ? (
+                        availableAgents.map((agent: any) => (
+                          <button
+                            key={agent.agent_id}
+                            onClick={() => {
+                              setSelectedAgents(prev =>
+                                prev.includes(agent.agent_id)
+                                  ? prev.filter(id => id !== agent.agent_id)
+                                  : [...prev, agent.agent_id]
+                              );
+                            }}
+                            className={cn(
+                              "w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-all text-left",
+                              selectedAgents.includes(agent.agent_id)
+                                ? "bg-brand-accent/10 border-brand-accent"
+                                : "bg-white/5 border-white/10 hover:bg-white/10"
+                            )}
+                          >
+                            <div className={cn(
+                              "w-5 h-5 rounded border flex items-center justify-center",
+                              selectedAgents.includes(agent.agent_id)
+                                ? "bg-brand-accent border-brand-accent"
+                                : "border-white/20"
+                            )}>
+                              {selectedAgents.includes(agent.agent_id) && (
+                                <CheckCircle2 className="w-4 h-4 text-black" />
+                              )}
+                            </div>
+                            <div className="flex-1">
+                              <div className="text-xs font-bold text-white">{agent.agent_id}</div>
+                              <div className="text-[9px] text-slate-500">Weight: {agent.capability_weight}</div>
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="text-center py-4 text-slate-500 text-xs">No agents available</div>
+                      )}
+                    </div>
+                    {selectedAgents.length > 0 && (
+                      <div className="text-[10px] text-brand-accent font-mono">
+                        {selectedAgents.length} agent(s) selected
+                      </div>
+                    )}
+                  </div>
+
                   <div className="pt-4 flex gap-3">
                     <button 
                       onClick={() => setShowCreateModal(false)}
@@ -656,7 +798,7 @@ export default function GroupCollaboration() {
                     </button>
                     <button 
                       onClick={handleCreateGroup}
-                      disabled={!newGroupName.trim()}
+                      disabled={!newGroupName.trim() || selectedAgents.length === 0}
                       className="flex-1 py-4 rounded-2xl bg-brand-accent text-black text-[10px] font-black uppercase hover:brightness-110 transition-all disabled:opacity-50 shadow-lg shadow-brand-accent/20"
                     >
                       Initialize

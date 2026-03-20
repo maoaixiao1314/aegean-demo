@@ -24,16 +24,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { 
   RiskAssessmentInput, 
-  RiskAssessmentResult, 
-  ValidatorResult,
-  Decision, 
-  RiskLevel, 
-  Complexity,
+  RiskDecisionResponse,
   SubjectType,
   ActionType,
   Currency,
   Channel
 } from '../types';
+import { riskApi } from '../services/api';
 
 const PRESET_SCENARIOS: Record<string, RiskAssessmentInput> = {
   low_risk: {
@@ -105,9 +102,12 @@ const PRESET_SCENARIOS: Record<string, RiskAssessmentInput> = {
 const RiskAssessment: React.FC = () => {
   const [formData, setFormData] = useState<RiskAssessmentInput>(PRESET_SCENARIOS.low_risk);
   const [isAssessing, setIsAssessing] = useState(false);
-  const [result, setResult] = useState<RiskAssessmentResult | null>(null);
+  const [apiResult, setApiResult] = useState<RiskDecisionResponse | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string>('');
   const [ttl, setTtl] = useState(0);
   const [showProofForm, setShowProofForm] = useState(false);
+  const [challengeEvidence, setChallengeEvidence] = useState('');
+  const [challengeEvidenceType, setChallengeEvidenceType] = useState('purpose_proof');
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -129,103 +129,49 @@ const RiskAssessment: React.FC = () => {
     setShowProofForm(false);
   };
 
-  const runAssessment = () => {
+  const runAssessment = async () => {
     setIsAssessing(true);
-    setResult(null);
+    setErrorMsg('');
+    setApiResult(null);
     setShowProofForm(false);
-
-    // Simulate VAN logic
-    setTimeout(() => {
-      const complexity: Complexity = formData.amount > 10000 || formData.geo_location.startsWith('KP') ? 'HARD' : 
-                          formData.amount > 1000 ? 'MEDIUM' : 'SIMPLE';
-      
-      let decision: Decision = 'APPROVE';
-      let riskLevel: RiskLevel = 'low';
-      let indicators: string[] = [];
-      let challengeMaterials: string[] | undefined;
-
-      // Logic simulation
-      if (formData.geo_location.startsWith('KP')) {
-        decision = 'REJECT';
-        riskLevel = 'critical';
-        indicators.push('sanctioned_region_KP');
-      } else if (formData.amount > 9000 && formData.recent_transaction_count > 5) {
-        decision = 'REVIEW';
-        riskLevel = 'high';
-        indicators.push('aml_structuring_detected', 'high_velocity');
-      } else if (formData.trust_score < 0.3) {
-        decision = 'CHALLENGE';
-        riskLevel = 'medium';
-        indicators.push('low_trust_score');
-        challengeMaterials = ['Government ID', 'Proof of Address', 'Selfie Verification'];
-      } else if (formData.amount > 5000 && formData.total_transactions < 10) {
-        decision = 'CHALLENGE';
-        riskLevel = 'medium';
-        indicators.push('new_account_high_value');
-        challengeMaterials = ['Bank Statement', 'Source of Wealth Declaration'];
-      }
-
-      const validators: ValidatorResult[] = [
-        {
-          name: 'Amount Validator',
-          risk: (formData.amount > 10000 ? 'high' : formData.amount > 1000 ? 'medium' : 'low') as RiskLevel,
-          confidence: 94,
-          reasoning: formData.amount > 10000 ? 'Transaction amount exceeds standard individual limits.' : 'Amount within normal operating parameters.',
-          icon: '💰'
-        },
-        {
-          name: 'Identity Validator',
-          risk: (formData.trust_score < 0.2 ? 'critical' : formData.trust_score < 0.5 ? 'medium' : 'low') as RiskLevel,
-          confidence: 88,
-          reasoning: `Trust score of ${formData.trust_score} indicates ${formData.trust_score < 0.5 ? 'elevated' : 'minimal'} identity risk.`,
-          icon: '🆔'
-        },
-        {
-          name: 'Anomaly Validator',
-          risk: (formData.geo_location.startsWith('KP') ? 'critical' : 'low') as RiskLevel,
-          confidence: 99,
-          reasoning: formData.geo_location.startsWith('KP') ? 'Geographic location matches OFAC sanctioned territory.' : 'Location verified as non-sanctioned.',
-          icon: '🌐'
-        }
-      ];
-
-      if (complexity !== 'SIMPLE') {
-        validators.push({
-          name: 'Compliance Validator',
-          risk: (formData.recent_transaction_amount > 50000 ? 'high' : 'low') as RiskLevel,
-          confidence: 92,
-          reasoning: 'Velocity check against AML thresholds complete.',
-          icon: '⚖️'
-        });
-      }
-
-      if (complexity === 'HARD') {
-        validators.push({
-          name: 'Context Validator',
-          risk: (formData.trace_context?.includes('bulk') ? 'high' : 'low') as RiskLevel,
-          confidence: 85,
-          reasoning: 'Deep analysis of transaction intent and trace context.',
-          icon: '🧠'
-        });
-      }
-
-      const newResult: RiskAssessmentResult = {
-        id: `VAN-${Math.floor(Math.random() * 900000) + 100000}`,
-        decision,
-        riskLevel,
-        confidence: Math.floor(Math.random() * 15) + 85,
-        latency: parseFloat((Math.random() * 2 + 0.5).toFixed(2)),
-        complexity,
-        validators,
-        indicators,
-        ttl: 300,
-        challengeMaterials
+    try {
+      const payload = {
+        ...formData,
+        priority: 'normal',
+        debug_mode: false,
       };
-
-      setResult(newResult);
-      setTtl(newResult.ttl);
+      const { data } = await riskApi.evaluate(payload);
+      setApiResult(data);
+      setTtl(data.ttl || 0);
+      if (data.decision === 'CHALLENGE' && data.challenge_id) {
+        setShowProofForm(true);
+      }
+    } catch (e: any) {
+      setErrorMsg(e?.response?.data?.detail || e?.message || 'Risk evaluate failed');
+    } finally {
       setIsAssessing(false);
-    }, 2000);
+    }
+  };
+
+  const submitChallengeResponse = async () => {
+    if (!apiResult?.challenge_id || !challengeEvidence.trim()) return;
+    setIsAssessing(true);
+    setErrorMsg('');
+    try {
+      const { data } = await riskApi.respondChallenge(apiResult.challenge_id, {
+        evidence_type: challengeEvidenceType,
+        evidence_content: challengeEvidence,
+        submitted_by: formData.subject_id,
+      });
+      setApiResult(data);
+      setTtl(data.ttl || 0);
+      setShowProofForm(false);
+      setChallengeEvidence('');
+    } catch (e: any) {
+      setErrorMsg(e?.response?.data?.detail || e?.message || 'Challenge response failed');
+    } finally {
+      setIsAssessing(false);
+    }
   };
 
   return (
@@ -455,9 +401,19 @@ const RiskAssessment: React.FC = () => {
         {/* Right Side: Assessment Results */}
         <div className="lg:col-span-7 flex flex-col gap-6 overflow-hidden">
           <AnimatePresence mode="wait">
-            {result ? (
+            {errorMsg && (
               <motion.div 
-                key={result.id}
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+              >
+                {errorMsg}
+              </motion.div>
+            )}
+            {apiResult ? (
+              <motion.div 
+                key={apiResult.decision_id}
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
@@ -466,60 +422,60 @@ const RiskAssessment: React.FC = () => {
                 {/* Decision Card */}
                 <div className={cn(
                   "p-8 rounded-2xl border-2 flex items-center justify-between relative overflow-hidden",
-                  result.decision === 'APPROVE' ? "bg-green-500/10 border-green-500/30" :
-                  result.decision === 'REJECT' ? "bg-red-500/10 border-red-500/30" :
-                  result.decision === 'CHALLENGE' ? "bg-orange-500/10 border-orange-500/30" :
+                  apiResult.decision === 'APPROVE' ? "bg-green-500/10 border-green-500/30" :
+                  apiResult.decision === 'REJECT' ? "bg-red-500/10 border-red-500/30" :
+                  apiResult.decision === 'CHALLENGE' ? "bg-orange-500/10 border-orange-500/30" :
                   "bg-yellow-500/10 border-yellow-500/30"
                 )}>
                   <div className="absolute top-0 right-0 p-4 opacity-5">
-                    {result.decision === 'APPROVE' && <CheckCircle2 className="w-32 h-32 text-green-500" />}
-                    {result.decision === 'REJECT' && <XCircle className="w-32 h-32 text-red-500" />}
-                    {result.decision === 'CHALLENGE' && <HelpCircle className="w-32 h-32 text-orange-500" />}
-                    {result.decision === 'REVIEW' && <AlertTriangle className="w-32 h-32 text-yellow-500" />}
+                    {apiResult.decision === 'APPROVE' && <CheckCircle2 className="w-32 h-32 text-green-500" />}
+                    {apiResult.decision === 'REJECT' && <XCircle className="w-32 h-32 text-red-500" />}
+                    {apiResult.decision === 'CHALLENGE' && <HelpCircle className="w-32 h-32 text-orange-500" />}
+                    {apiResult.decision === 'REVIEW' && <AlertTriangle className="w-32 h-32 text-yellow-500" />}
                   </div>
 
                   <div className="flex items-center gap-6">
                     <div className={cn(
                       "w-20 h-20 rounded-2xl flex items-center justify-center text-4xl",
-                      result.decision === 'APPROVE' ? "bg-green-500/20 text-green-500" :
-                      result.decision === 'REJECT' ? "bg-red-500/20 text-red-500" :
-                      result.decision === 'CHALLENGE' ? "bg-orange-500/20 text-orange-500" :
+                      apiResult.decision === 'APPROVE' ? "bg-green-500/20 text-green-500" :
+                      apiResult.decision === 'REJECT' ? "bg-red-500/20 text-red-500" :
+                      apiResult.decision === 'CHALLENGE' ? "bg-orange-500/20 text-orange-500" :
                       "bg-yellow-500/20 text-yellow-500"
                     )}>
-                      {result.decision === 'APPROVE' && <CheckCircle2 className="w-12 h-12" />}
-                      {result.decision === 'REJECT' && <XCircle className="w-12 h-12" />}
-                      {result.decision === 'CHALLENGE' && <HelpCircle className="w-12 h-12" />}
-                      {result.decision === 'REVIEW' && <AlertTriangle className="w-12 h-12" />}
+                      {apiResult.decision === 'APPROVE' && <CheckCircle2 className="w-12 h-12" />}
+                      {apiResult.decision === 'REJECT' && <XCircle className="w-12 h-12" />}
+                      {apiResult.decision === 'CHALLENGE' && <HelpCircle className="w-12 h-12" />}
+                      {apiResult.decision === 'REVIEW' && <AlertTriangle className="w-12 h-12" />}
                     </div>
                     <div>
                       <div className="text-4xl font-black tracking-tighter mb-1">
-                        {result.decision}
+                        {apiResult.decision}
                       </div>
                       <div className="flex items-center gap-3">
                         <span className={cn(
                           "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
-                          result.riskLevel === 'low' ? "bg-green-500/20 text-green-400" :
-                          result.riskLevel === 'medium' ? "bg-yellow-500/20 text-yellow-400" :
-                          result.riskLevel === 'high' ? "bg-orange-500/20 text-orange-400" :
+                          apiResult.risk_level === 'low' ? "bg-green-500/20 text-green-400" :
+                          apiResult.risk_level === 'medium' ? "bg-yellow-500/20 text-yellow-400" :
+                          apiResult.risk_level === 'high' ? "bg-orange-500/20 text-orange-400" :
                           "bg-red-500/20 text-red-400"
                         )}>
-                          {result.riskLevel} Risk
+                          {apiResult.risk_level} Risk
                         </span>
-                        <span className="text-xs text-slate-500 font-mono">{result.id}</span>
+                        <span className="text-xs text-slate-500 font-mono">{apiResult.decision_id}</span>
                       </div>
                     </div>
                   </div>
 
                   <div className="text-right">
                     <div className="text-[10px] font-mono text-slate-500 uppercase mb-2">Confidence Level</div>
-                    <div className="text-3xl font-bold font-mono text-white mb-2">{result.confidence}%</div>
+                    <div className="text-3xl font-bold font-mono text-white mb-2">{Math.round(apiResult.confidence * 100)}%</div>
                     <div className="w-32 h-1.5 bg-slate-800 rounded-full overflow-hidden">
                       <motion.div 
                         initial={{ width: 0 }}
-                        animate={{ width: `${result.confidence}%` }}
+                        animate={{ width: `${apiResult.confidence * 100}%` }}
                         className={cn(
                           "h-full rounded-full",
-                          result.confidence > 90 ? "bg-brand-accent" : "bg-yellow-500"
+                          apiResult.confidence > 0.9 ? "bg-brand-accent" : "bg-yellow-500"
                         )}
                       />
                     </div>
@@ -533,23 +489,17 @@ const RiskAssessment: React.FC = () => {
                       <Clock className="w-5 h-5 text-slate-400" />
                     </div>
                     <div>
-                      <div className="text-[10px] font-mono text-slate-500 uppercase">Latency</div>
-                      <div className="text-lg font-bold text-white">{result.latency}s</div>
+                      <div className="text-[10px] font-mono text-slate-500 uppercase">Execution Time</div>
+                      <div className="text-lg font-bold text-white">{apiResult.execution_time}ms</div>
                     </div>
                   </div>
                   <div className="bg-brand-card border border-brand-border rounded-xl p-4 flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center">
-                      <Cpu className="w-5 h-5 text-slate-400" />
+                      <Users className="w-5 h-5 text-slate-400" />
                     </div>
                     <div>
-                      <div className="text-[10px] font-mono text-slate-500 uppercase">Complexity</div>
-                      <div className={cn(
-                        "text-lg font-bold",
-                        result.complexity === 'HARD' ? "text-red-400" : 
-                        result.complexity === 'MEDIUM' ? "text-yellow-400" : "text-brand-accent"
-                      )}>
-                        {result.complexity}
-                      </div>
+                      <div className="text-[10px] font-mono text-slate-500 uppercase">Validators</div>
+                      <div className="text-lg font-bold text-white">{apiResult.participating_validators?.length || 0}</div>
                     </div>
                   </div>
                   <div className="bg-brand-card border border-brand-border rounded-xl p-4 flex items-center gap-3">
@@ -565,53 +515,18 @@ const RiskAssessment: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Validator Committee */}
-                <div className="space-y-4">
-                  <h3 className="text-xs font-mono uppercase tracking-widest text-slate-500 flex items-center gap-2">
-                    <Users className="w-3 h-3" />
-                    Validator Committee Voting
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {result.validators.map((v, idx) => (
-                      <motion.div 
-                        key={idx}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: idx * 0.1 }}
-                        className="bg-brand-card border border-brand-border rounded-xl p-4 hover:border-brand-accent/30 transition-all group"
-                      >
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xl">{v.icon}</span>
-                            <span className="text-sm font-bold text-white">{v.name}</span>
-                          </div>
-                          <div className={cn(
-                            "text-[10px] font-bold px-2 py-0.5 rounded uppercase",
-                            v.risk === 'low' ? "bg-green-500/10 text-green-400" :
-                            v.risk === 'medium' ? "bg-yellow-500/10 text-yellow-400" :
-                            "bg-red-500/10 text-red-400"
-                          )}>
-                            {v.risk}
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-[10px] text-slate-500 uppercase">Confidence</span>
-                          <span className="text-[10px] font-mono text-brand-accent">{v.confidence}%</span>
-                        </div>
-                        <p className="text-xs text-slate-400 italic leading-relaxed">
-                          "{v.reasoning}"
-                        </p>
-                      </motion.div>
-                    ))}
-                  </div>
+                {/* Rationale */}
+                <div className="bg-brand-card border border-brand-border rounded-xl p-4">
+                  <h3 className="text-xs font-mono uppercase tracking-widest text-slate-500 mb-3">Decision Rationale</h3>
+                  <p className="text-sm text-slate-300 leading-relaxed">{apiResult.rationale}</p>
                 </div>
 
-                {/* Indicators */}
-                {result.indicators.length > 0 && (
+                {/* Risk Indicators */}
+                {apiResult.risk_indicators && apiResult.risk_indicators.length > 0 && (
                   <div className="space-y-3">
                     <h3 className="text-xs font-mono uppercase tracking-widest text-slate-500">Risk Indicators</h3>
                     <div className="flex flex-wrap gap-2">
-                      {result.indicators.map((ind, idx) => (
+                      {apiResult.risk_indicators.map((ind, idx) => (
                         <span key={idx} className="px-3 py-1 bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] font-mono rounded-full">
                           [{ind}]
                         </span>
@@ -621,7 +536,7 @@ const RiskAssessment: React.FC = () => {
                 )}
 
                 {/* Challenge Section */}
-                {result.decision === 'CHALLENGE' && (
+                {apiResult.decision === 'CHALLENGE' && (
                   <motion.div 
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -632,17 +547,19 @@ const RiskAssessment: React.FC = () => {
                       <h3 className="text-lg font-bold text-white">Verification Required</h3>
                     </div>
                     <p className="text-sm text-slate-400 mb-6">
-                      The system requires additional proof materials to proceed with this high-value or unusual transaction.
+                      {apiResult.challenge_instructions || 'The system requires additional proof materials to proceed with this transaction.'}
                     </p>
                     
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                      {result.challengeMaterials?.map((item, idx) => (
-                        <div key={idx} className="flex items-center gap-3 p-3 bg-brand-bg border border-brand-border rounded-lg">
-                          <div className="w-2 h-2 rounded-full bg-orange-500" />
-                          <span className="text-sm text-slate-200">{item}</span>
-                        </div>
-                      ))}
-                    </div>
+                    {apiResult.required_evidence && apiResult.required_evidence.length > 0 && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                        {apiResult.required_evidence.map((item, idx) => (
+                          <div key={idx} className="flex items-center gap-3 p-3 bg-brand-bg border border-brand-border rounded-lg">
+                            <div className="w-2 h-2 rounded-full bg-orange-500" />
+                            <span className="text-sm text-slate-200">{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     {!showProofForm ? (
                       <button 
@@ -658,28 +575,34 @@ const RiskAssessment: React.FC = () => {
                         animate={{ opacity: 1, height: 'auto' }}
                         className="space-y-4 pt-4 border-t border-orange-500/20"
                       >
-                        <div className="p-8 border-2 border-dashed border-orange-500/20 rounded-xl flex flex-col items-center justify-center text-slate-500 hover:border-orange-500/40 transition-all cursor-pointer">
-                          <RefreshCw className="w-8 h-8 mb-2 opacity-50" />
-                          <p className="text-sm">Drag and drop files or click to upload</p>
-                          <p className="text-[10px] mt-1">PDF, JPG, PNG (Max 10MB)</p>
+                        <div className="space-y-3">
+                          <label className="text-[10px] font-mono uppercase text-slate-500">Evidence Type</label>
+                          <select 
+                            value={challengeEvidenceType}
+                            onChange={e => setChallengeEvidenceType(e.target.value)}
+                            className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-accent/50"
+                          >
+                            <option value="purpose_proof">Purpose Proof</option>
+                            <option value="identity_verification">Identity Verification</option>
+                            <option value="source_of_funds">Source of Funds</option>
+                            <option value="other">Other</option>
+                          </select>
+                        </div>
+                        <div className="space-y-3">
+                          <label className="text-[10px] font-mono uppercase text-slate-500">Evidence Content</label>
+                          <textarea 
+                            value={challengeEvidence}
+                            onChange={e => setChallengeEvidence(e.target.value)}
+                            placeholder="Provide evidence details or upload description..."
+                            className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-accent/50 min-h-[100px] resize-none"
+                          />
                         </div>
                         <button 
-                          onClick={() => {
-                            setIsAssessing(true);
-                            setTimeout(() => {
-                              setIsAssessing(false);
-                              setResult({
-                                ...result,
-                                decision: 'APPROVE',
-                                riskLevel: 'low',
-                                indicators: ['challenge_resolved_verified']
-                              });
-                              setShowProofForm(false);
-                            }, 1500);
-                          }}
-                          className="w-full py-3 bg-brand-accent text-black font-bold rounded-xl hover:bg-brand-accent/80 transition-all"
+                          onClick={submitChallengeResponse}
+                          disabled={isAssessing || !challengeEvidence.trim()}
+                          className="w-full py-3 bg-brand-accent text-black font-bold rounded-xl hover:bg-brand-accent/80 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          UPLOAD AND RE-EVALUATE
+                          {isAssessing ? 'PROCESSING...' : 'SUBMIT EVIDENCE'}
                         </button>
                       </motion.div>
                     )}
