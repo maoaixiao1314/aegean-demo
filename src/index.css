@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-brand-bg: #0a0a0a;
+  --color-brand-card: #141414;
+  --color-brand-border: #262626;
+  --color-brand-accent: #00ff88;
+  --color-brand-risk-low: #10b981;
+  --color-brand-risk-medium: #f59e0b;
+  --color-brand-risk-high: #ef4444;
+  --color-brand-risk-critical: #7f1d1d;
+}
+
+@layer base {
+  body {
+    @apply bg-brand-bg text-slate-200 font-sans antialiased;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
+
+.glass-panel {
+  @apply bg-brand-card/80 border border-brand-border backdrop-blur-md rounded-xl;
+}
+
+.technical-grid {
+  background-image: radial-gradient(circle at 1px 1px, #262626 1px, transparent 0);
+  background-size: 24px 24px;
+}
