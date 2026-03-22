@@ -1,42 +1,79 @@
 import axios from 'axios';
+import { 
+  Agent, 
+  AgentGlobalStats, 
+  Group, 
+  GroupWeightsSummary, 
+  ConsensusResult, 
+  RiskEvaluationRequest, 
+  RiskEvaluationResponse 
+} from '../types';
 
-const BASE_URL = import.meta.env.VITE_AEGEAN_API_BASE_URL || 'http://173.249.5.203:8000';
+const API_BASE_URL = '/api/v1';
 
 const api = axios.create({
-  baseURL: BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-  timeout: 20000,
+  baseURL: API_BASE_URL,
 });
 
-export const systemApi = {
-  health: () => api.get('/health'),
-  root: () => api.get('/'),
+export const agentService = {
+  getAgents: async (): Promise<{ agents: Agent[] }> => {
+    try {
+      const response = await api.get('/groups/agents');
+      return {
+        agents: Array.isArray(response.data?.agents) ? response.data.agents : []
+      };
+    } catch (error) {
+      console.error('API Error: getAgents', error);
+      return { agents: [] };
+    }
+  },
+  getAgentGlobalStats: async (agentId: string): Promise<AgentGlobalStats> => {
+    try {
+      const response = await api.get(`/groups/agents/${agentId}/global-stats`);
+      return response.data;
+    } catch (error) {
+      console.error(`API Error: getAgentGlobalStats for ${agentId}`, error);
+      throw error;
+    }
+  },
 };
 
-export const riskApi = {
-  evaluate: (data: any) => api.post('/api/v1/risk/evaluate', data),
-  respondChallenge: (challengeId: string, data: any) =>
-    api.post(`/api/v1/risk/challenge/${challengeId}/respond`, data),
-  getSession: (sessionId: string) => api.get(`/api/v1/risk/sessions/${sessionId}`),
-  getSessions: (params?: { subject_id?: string; status?: string; limit?: number }) =>
-    api.get('/api/v1/risk/sessions', { params }),
+export const groupService = {
+  createGroup: async (data: any): Promise<Group> => {
+    const response = await api.post('/groups', data);
+    return response.data;
+  },
+  getWeightsSummary: async (groupId: string): Promise<GroupWeightsSummary> => {
+    const response = await api.get(`/groups/${groupId}/weights-summary`);
+    return response.data;
+  },
+  updateMemberWeight: async (groupId: string, agentId: string, weight: number): Promise<any> => {
+    const response = await api.put(`/groups/${groupId}/members/${agentId}`, { capability_weight: weight });
+    return response.data;
+  },
+  addMember: async (groupId: string, data: any): Promise<any> => {
+    const response = await api.post(`/groups/${groupId}/members`, data);
+    return response.data;
+  },
+  executeConsensus: async (groupId: string, data: any): Promise<ConsensusResult> => {
+    const response = await api.post(`/groups/${groupId}/consensus`, data);
+    return response.data;
+  },
+  getConsensusHistory: async (groupId: string, limit = 20): Promise<any[]> => {
+    const response = await api.get(`/groups/${groupId}/consensus/history?limit=${limit}`);
+    return response.data;
+  },
 };
 
-export const groupApi = {
-  getAvailableAgents: () => api.get('/api/v1/groups/agents'),
-  createGroup: (data: any) => api.post('/api/v1/groups/', data),
-  getGroups: () => api.get('/api/v1/groups/'),
-  getGroup: (id: string) => api.get(`/api/v1/groups/${id}`),
-  deleteGroup: (id: string) => api.delete(`/api/v1/groups/${id}`),
-  addMember: (groupId: string, data: any) => api.post(`/api/v1/groups/${groupId}/members`, data),
-  getMembers: (groupId: string, activeOnly?: boolean) =>
-    api.get(`/api/v1/groups/${groupId}/members`, { params: { active_only: !!activeOnly } }),
-  sendMessage: (groupId: string, data: any) => api.post(`/api/v1/groups/${groupId}/messages`, data),
-  getMessages: (groupId: string, limit?: number) =>
-    api.get(`/api/v1/groups/${groupId}/messages`, { params: { limit } }),
-  runConsensus: (groupId: string, data: any) => api.post(`/api/v1/groups/${groupId}/consensus`, data),
+export const riskService = {
+  evaluate: async (data: RiskEvaluationRequest): Promise<RiskEvaluationResponse> => {
+    const response = await api.post('/risk/evaluate', data);
+    return response.data;
+  },
+  respondToChallenge: async (challengeId: string, data: any): Promise<RiskEvaluationResponse> => {
+    const response = await api.post(`/risk/challenge/${challengeId}/respond`, data);
+    return response.data;
+  },
 };
 
 export default api;
